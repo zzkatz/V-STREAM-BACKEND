@@ -8,12 +8,12 @@ export const servicePinger = () => {
                 "https://v-stream-backend.onrender.com/api/v1/healthcheck/health"
             );
             if (res.status === 200) {
-                console.log("🔁 Ping successful");
+                console.log("Ping successful");
             } else {
-                console.log(`⚠️ Ping responded with status: ${res.status}`);
+                console.log(` Ping responded with status: ${res.status}`);
             }
         } catch (err) {
-            console.error("❌ Ping failed:", err.message);
+            console.error("Ping failed:", err.message);
         }
     });
 };

@@ -1,4 +1,4 @@
-# Vsterams
+# V-STREAM
 
 - A streaming platform
 

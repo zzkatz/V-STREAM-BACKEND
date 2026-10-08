@@ -3,7 +3,7 @@ import { ApiError } from "./ApiError.js";
 
 async function checkEmailExists(email) {
     try {
-        const response = await axios.get(`https://apilayer.net/api/check`, {
+        const response = await axios.get(`https://api.apilayer.net/mailboxlayer/api/check`, {
             params: {
                 access_key: process.env.EMAIL_VALIDATION_KEY, // Ensure this is set in your environment
                 email: email,

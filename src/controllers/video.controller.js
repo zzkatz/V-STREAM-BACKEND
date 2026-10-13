@@ -7,9 +7,18 @@ import { Comment } from "../models/comment.model.js";
 import {
     uploadOnCloudinary,
     deleteOnCloudinary,
+    buildVideoClipUrl,
 } from "../utilities/cloudinary.js";
 import { ApiResponse } from "../utilities/ApiResponse.js";
 import mongoose, { isValidObjectId } from "mongoose";
+import axios from "axios";
+import sanitize from "sanitize-filename";
+import {
+    MIN_CLIP_DURATION_SEC,
+    MAX_CLIP_DURATION_SEC,
+    MAX_CLIP_BYTES,
+} from "../constants.js";
+
 const getAllVideos = asyncHandler(async (req, res) => {
     const { page = 1, limit = 10, query, sortBy, sortType, userId } = req.query;
 
@@ -19,20 +28,18 @@ const getAllVideos = asyncHandler(async (req, res) => {
 
     const searchPipeline = [];
 
-    // Full-text search using MongoDB Atlas Search
     if (query) {
+        const escaped = String(query).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
         searchPipeline.push({
-            $search: {
-                index: "full-text-search-index",
-                text: {
-                    query: query,
-                    path: ["title", "description"],
-                },
+            $match: {
+                $or: [
+                    { title: { $regex: escaped, $options: "i" } },
+                    { description: { $regex: escaped, $options: "i" } },
+                ],
             },
         });
     }
 
- 
     if (userId) {
         if (!isValidObjectId(userId)) {
             throw new ApiError(400, "Invalid userId");
@@ -45,7 +52,6 @@ const getAllVideos = asyncHandler(async (req, res) => {
         });
     }
 
-    
     searchPipeline.push({ $match: { isPublished: true } });
 
     // Sorting
@@ -82,7 +88,7 @@ const getAllVideos = asyncHandler(async (req, res) => {
         }
     );
 
-    
+
     const countPipeline = [...searchPipeline, { $count: "total" }];
 
     // Add pagination stages
@@ -238,15 +244,43 @@ const getVideoById = asyncHandler(async (req, res) => {
         },
         {
             $addFields: {
+                likeEntries: {
+                    $filter: {
+                        input: "$likes",
+                        as: "like",
+                        cond: { $ne: ["$$like.type", "dislike"] },
+                    },
+                },
+                dislikeEntries: {
+                    $filter: {
+                        input: "$likes",
+                        as: "like",
+                        cond: { $eq: ["$$like.type", "dislike"] },
+                    },
+                },
+            },
+        },
+        {
+            $addFields: {
                 likesCount: {
-                    $size: "$likes",
+                    $size: "$likeEntries",
+                },
+                dislikesCount: {
+                    $size: "$dislikeEntries",
                 },
                 owner: {
                     $first: "$owner",
                 },
                 isLiked: {
                     $cond: {
-                        if: { $in: [req.user?._id, "$likes.likedBy"] },
+                        if: { $in: [req.user?._id, "$likeEntries.likedBy"] },
+                        then: true,
+                        else: false,
+                    },
+                },
+                isDisliked: {
+                    $cond: {
+                        if: { $in: [req.user?._id, "$dislikeEntries.likedBy"] },
                         then: true,
                         else: false,
                     },
@@ -264,7 +298,9 @@ const getVideoById = asyncHandler(async (req, res) => {
                 comments: 1,
                 owner: 1,
                 likesCount: 1,
+                dislikesCount: 1,
                 isLiked: 1,
+                isDisliked: 1,
             },
         },
     ]);
@@ -450,6 +486,127 @@ const togglePublishStatus = asyncHandler(async (req, res) => {
         );
 });
 
+const downloadVideoClip = asyncHandler(async (req, res) => {
+    const { videoId } = req.params;
+    const start = Number(req.body?.start);
+    const end = Number(req.body?.end);
+
+    if (!isValidObjectId(videoId)) {
+        throw new ApiError(400, "Invalid videoId");
+    }
+
+    const video = await Video.findById(videoId).select(
+        "videoFile owner isPublished duration title"
+    );
+
+    if (!video) {
+        throw new ApiError(404, "Video not found");
+    }
+
+    const isOwner =
+        video.owner?.toString() === req.user?._id?.toString();
+
+    if (!video.isPublished && !isOwner) {
+        throw new ApiError(403, "You are not allowed to download this video");
+    }
+
+    const duration = Number(video.duration) || 0;
+
+    if (
+        !Number.isFinite(start) ||
+        !Number.isFinite(end) ||
+        start < 0 ||
+        end < 0
+    ) {
+        throw new ApiError(400, "Start and end times must be valid numbers");
+    }
+
+    if (start >= end) {
+        throw new ApiError(400, "Start time must be before end time");
+    }
+
+    if (start > duration || end > duration + 0.25) {
+        throw new ApiError(400, "Clip times must be within the video duration");
+    }
+
+    const clipLength = end - start;
+
+    if (clipLength < MIN_CLIP_DURATION_SEC) {
+        throw new ApiError(
+            400,
+            `Clip must be at least ${MIN_CLIP_DURATION_SEC} second(s)`
+        );
+    }
+
+    if (clipLength > MAX_CLIP_DURATION_SEC) {
+        throw new ApiError(
+            400,
+            `Clip cannot exceed ${MAX_CLIP_DURATION_SEC} seconds`
+        );
+    }
+
+    const publicId = video.videoFile?.public_id;
+    if (!publicId) {
+        throw new ApiError(500, "Video source is unavailable");
+    }
+
+    const clipUrl = buildVideoClipUrl(publicId, start, end);
+    if (!clipUrl) {
+        throw new ApiError(500, "Failed to create clip URL");
+    }
+
+    let upstream;
+    try {
+        upstream = await axios.get(clipUrl, {
+            responseType: "stream",
+            timeout: 120000,
+            validateStatus: (status) => status >= 200 && status < 300,
+        });
+    } catch {
+        throw new ApiError(502, "Failed to fetch video clip");
+    }
+
+    const contentLength = Number(upstream.headers["content-length"]);
+    if (Number.isFinite(contentLength) && contentLength > MAX_CLIP_BYTES) {
+        upstream.data.destroy();
+        throw new ApiError(413, "Clip exceeds maximum allowed file size");
+    }
+
+    const safeTitle = sanitize(video.title || "clip") || "clip";
+    const startLabel = Math.floor(start);
+    const endLabel = Math.floor(end);
+    const filename = `${safeTitle}-${startLabel}-${endLabel}.mp4`;
+
+    res.setHeader("Content-Type", "video/mp4");
+    res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="${filename}"`
+    );
+    if (Number.isFinite(contentLength) && contentLength > 0) {
+        res.setHeader("Content-Length", String(contentLength));
+    }
+
+    const abortUpstream = () => {
+        if (upstream?.data && !upstream.data.destroyed) {
+            upstream.data.destroy();
+        }
+    };
+
+    req.on("close", abortUpstream);
+    res.on("close", abortUpstream);
+
+    upstream.data.on("error", () => {
+        abortUpstream();
+        if (!res.headersSent) {
+            res.status(502).end();
+        } else {
+            res.destroy();
+        }
+    });
+
+    upstream.data.pipe(res);
+});
+
 export {
     getAllVideos,
     getVideoById,
@@ -457,4 +614,5 @@ export {
     updateVideo,
     togglePublishStatus,
     deleteVideo,
+    downloadVideoClip,
 };

@@ -7,13 +7,16 @@
     "scripts": {
         "dev": "nodemon -r dotenv/config --experimental-json-modules src/index.js",
         "start": "node src/index.js",
+        "test": "vitest run",
+        "test:watch": "vitest",
         "vercel-build": "echo hello  "
     },
     "author": "abhay",
     "license": "ISC",
     "devDependencies": {
         "nodemon": "^3.1.14",
-        "prettier": "^3.8.4"
+        "prettier": "^3.8.4",
+        "vitest": "^5.0.4"
     },
     "dependencies": {
         "axios": "^1.18.1",
@@ -27,7 +30,9 @@
         "express-rate-limit": "^7.5.1",
         "express-session": "^1.19.0",
         "fs": "0.0.1-security",
+        "ioredis": "^6.0.0",
         "jsonwebtoken": "^9.0.3",
+        "livekit-server-sdk": "^2.19.1",
         "lusca": "^1.7.0",
         "mongodb": "^6.21.0",
         "mongoose": "^8.24.1",
@@ -37,6 +42,7 @@
         "node-fetch": "^3.3.2",
         "node-schedule": "^2.1.1",
         "sanitize-filename": "^1.6.4",
-        "tar": "7.5.16"
+        "tar": "7.5.16",
+        "uuid": "^14.0.3"
     }
 }

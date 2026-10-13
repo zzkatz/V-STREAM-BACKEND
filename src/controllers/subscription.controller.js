@@ -4,10 +4,8 @@ import { ApiError } from "../utilities/ApiError.js";
 import { ApiResponse } from "../utilities/ApiResponse.js";
 import { asyncHandler } from "../utilities/asyncHandler.js";
 
-
 const toggleSubscription = asyncHandler(async (req, res) => {
     const { channelId } = req.params;
-
 
     if (!isValidObjectId(channelId)) {
         throw new ApiError(400, "Invalid channelId");
@@ -47,7 +45,6 @@ const toggleSubscription = asyncHandler(async (req, res) => {
             )
         );
 });
-
 
 const getUserChannelSubscribers = asyncHandler(async (req, res) => {
     let { channelId } = req.params;
@@ -133,6 +130,10 @@ const getUserChannelSubscribers = asyncHandler(async (req, res) => {
 const getSubscribedChannels = asyncHandler(async (req, res) => {
     const { subscriberId } = req.params;
 
+    if (!isValidObjectId(subscriberId)) {
+        throw new ApiError(400, "Invalid subscriberId");
+    }
+
     const subscribedChannels = await Subscription.aggregate([
         {
             $match: {
@@ -148,17 +149,26 @@ const getSubscribedChannels = asyncHandler(async (req, res) => {
                 pipeline: [
                     {
                         $lookup: {
-                            from: "videos",
+                            from: "subscriptions",
                             localField: "_id",
-                            foreignField: "owner",
-                            as: "videos",
+                            foreignField: "channel",
+                            as: "subscribers",
                         },
                     },
                     {
                         $addFields: {
-                            latestVideo: {
-                                $last: "$videos",
+                            subscribersCount: {
+                                $size: "$subscribers",
                             },
+                        },
+                    },
+                    {
+                        $project: {
+                            _id: 1,
+                            username: 1,
+                            fullName: 1,
+                            "avatar.url": 1,
+                            subscribersCount: 1,
                         },
                     },
                 ],
@@ -170,23 +180,7 @@ const getSubscribedChannels = asyncHandler(async (req, res) => {
         {
             $project: {
                 _id: 0,
-                subscribedChannel: {
-                    _id: 1,
-                    username: 1,
-                    fullName: 1,
-                    "avatar.url": 1,
-                    latestVideo: {
-                        _id: 1,
-                        "videoFile.url": 1,
-                        "thumbnail.url": 1,
-                        owner: 1,
-                        title: 1,
-                        description: 1,
-                        duration: 1,
-                        createdAt: 1,
-                        views: 1
-                    },
-                },
+                subscribedChannel: 1,
             },
         },
     ]);

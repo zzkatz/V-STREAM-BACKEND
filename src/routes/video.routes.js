@@ -1,5 +1,9 @@
 import { Router } from "express";
-import { upload } from "../middlewares/multer.middleware.js";
+import {
+    uploadImage,
+    uploadMedia,
+    enforceImageFieldSize,
+} from "../middlewares/multer.middleware.js";
 import { verifyJWT } from "../middlewares/auth.middleware.js";
 import {
     deleteVideo,
@@ -8,6 +12,7 @@ import {
     updateVideo,
     publishAVideo,
     togglePublishStatus,
+    downloadVideoClip,
 } from "../controllers/video.controller.js";
 
 const router = Router();
@@ -17,7 +22,7 @@ router
     .get(getAllVideos)
     .post(
         verifyJWT,
-        upload.fields([
+        uploadMedia.fields([
             {
                 name: "videoFile",
                 maxCount: 1,
@@ -27,6 +32,7 @@ router
                 maxCount: 1,
             },
         ]),
+        enforceImageFieldSize,
         publishAVideo
     );
 
@@ -34,7 +40,15 @@ router
     .route("/v/:videoId")
     .get(verifyJWT, getVideoById)
     .delete(verifyJWT, deleteVideo)
-    .patch(verifyJWT, upload.single("thumbnail"), updateVideo);
+    .patch(
+        verifyJWT,
+        uploadImage.single("thumbnail"),
+        updateVideo
+    );
+
+router
+    .route("/v/:videoId/clip")
+    .post(verifyJWT, downloadVideoClip);
 
 router.route("/toggle/publish/:videoId").patch(verifyJWT, togglePublishStatus);
 

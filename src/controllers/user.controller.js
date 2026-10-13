@@ -6,6 +6,7 @@ import { checkEmailExists, isDisposableEmail } from "../utilities/emailValidatio
 import { ApiError } from "../utilities/ApiError.js";
 import { uploadOnCloudinary } from "../utilities/cloudinary.js";
 import { ApiResponse } from "../utilities/ApiResponse.js";
+import { clear, recordFailure } from "../utilities/loginAttemptStore.js";
 import { updateUserAvatar } from "./avatarUpdate.controller.js";
 import { updateUserCoverImage } from "./coverImageUpdate.controller.js";
 
@@ -40,11 +41,10 @@ const registerUser = asyncHandler(async (req, res) => {
     const isValidEmail = await checkEmailExists(email)
 
     if (isTempEmail) {
-        throw new ApiError(400, "Unexcepted Email");
+        throw new ApiError(400, "Disposable or temporary email addresses are not allowed");
     }
     if (!isValidEmail) {
-        throw new ApiError(400, "Invalid or non-existent email");
-
+        throw new ApiError(400, "Invalid or non-existent email address");
     }
 
     const existedUser = await User.findOne({
@@ -54,7 +54,7 @@ const registerUser = asyncHandler(async (req, res) => {
     if (existedUser) {
         throw new ApiError(
             409,
-            "User with this  username or email already exists"
+            "An account with this username or email already exists"
         );
     }
 
@@ -79,7 +79,7 @@ const registerUser = asyncHandler(async (req, res) => {
             coverImageId = coverImage._id;
         }
     }
-    const avatarLocalPath = req.files?.avatar[0]?.path;
+    const avatarLocalPath = req.files?.avatar?.[0]?.path;
 
     if (!avatarLocalPath) {
         throw new ApiError(400, "Avatar file is required");
@@ -125,9 +125,14 @@ const registerUser = asyncHandler(async (req, res) => {
 
 const loginUser = asyncHandler(async (req, res) => {
     const { email, username, password } = req.body;
+    const identifier = (email || username || "").toLowerCase().trim();
 
     if (!(username || email)) {
-        throw new ApiError(400, "username or email is required.");
+        throw new ApiError(400, "Username or email is required");
+    }
+
+    if (!password || String(password).trim() === "") {
+        throw new ApiError(400, "Password is required");
     }
 
     const user = await User.findOne({
@@ -135,33 +140,37 @@ const loginUser = asyncHandler(async (req, res) => {
     });
 
     if (!user) {
-        throw new ApiError(404, "User doesnot exist.");
+        recordFailure(req.ip, identifier);
+        throw new ApiError(404, "No account found with that username or email");
     }
 
     const isPasswordCorrect = await user.isPasswordCorrect(password);
 
     if (!isPasswordCorrect) {
-        throw new ApiError(401, "Invalid user credentials.");
+        recordFailure(req.ip, identifier);
+        throw new ApiError(401, "Incorrect password. Please try again");
     }
+
+    clear(req.ip, identifier);
 
     const { accessToken, refreshToken } = await generateAccessAndRefreshTokens(user._id);
 
     const loggedInUser = await User.findById(user._id).select(" -password -refreshToken");
 
-/* 
-Note from abhay:
-// Manually setting Set-Cookie headers to include the "Partitioned" attribute.
-// This is necessary because Express's res.cookie() currently doesn't support setting the Partitioned flag.
-// The Partitioned attribute allows third-party cookies to be scoped per top-level site context,
-// which is part of modern browser privacy changes (e.g., Chrome's Privacy Sandbox).
-// Without this, cookies like "accessToken" and "refreshToken" may be rejected in third-party contexts
-// or trigger warnings, especially when SameSite=None is used.
-*/
-    
+    /* 
+    Note from abhay:
+    // Manually setting Set-Cookie headers to include the "Partitioned" attribute.
+    // This is necessary because Express's res.cookie() currently doesn't support setting the Partitioned flag.
+    // The Partitioned attribute allows third-party cookies to be scoped per top-level site context,
+    // which is part of modern browser privacy changes (e.g., Chrome's Privacy Sandbox).
+    // Without this, cookies like "accessToken" and "refreshToken" may be rejected in third-party contexts
+    // or trigger warnings, especially when SameSite=None is used.
+    */
+
     res.setHeader("Set-Cookie", [
-    `accessToken=${accessToken}; HttpOnly; Secure; SameSite=None; Partitioned; Path=/`,
-    `refreshToken=${refreshToken}; HttpOnly; Secure; SameSite=None; Partitioned; Path=/`
-]);
+        `accessToken=${accessToken}; HttpOnly; Secure; SameSite=None; Partitioned; Path=/`,
+        `refreshToken=${refreshToken}; HttpOnly; Secure; SameSite=None; Partitioned; Path=/`
+    ]);
 
     const options = {
         httpOnly: true,
@@ -183,7 +192,21 @@ Note from abhay:
 
 });
 
+const logOutUser = asyncHandler(async (req, res) => {
+    await User.findByIdAndUpdate(req.user._id, {
+        $unset: { refreshToken: 1 },
+    });
 
+    res.setHeader("Set-Cookie", [
+        "accessToken=; HttpOnly; Secure; SameSite=None; Partitioned; Path=/; Max-Age=0",
+        "refreshToken=; HttpOnly; Secure; SameSite=None; Partitioned; Path=/; Max-Age=0",
+    ]);
+
+    return res
+        .status(200)
+        .json(new ApiResponse(200, {}, "User logged out"));
+});
+/* 
 const logOutUser = asyncHandler(async (req, res) => {
     await User.findByIdAndUpdate(
         req.user._id,
@@ -208,7 +231,7 @@ const logOutUser = asyncHandler(async (req, res) => {
         .clearCookie("accessToken", options)
         .clearCookie("refreshToken", options)
         .json(new ApiResponse(200, {}, "User logged out"));
-});
+}); */
 
 const refreshAccessToken = asyncHandler(async (req, res) => {
     const incomingRefreshToken =
@@ -337,7 +360,7 @@ const getUserChannelProfile = asyncHandler(async (req, res) => {
             // this will find how many (user)documents contain the channel_name to find the total number of subscribers
             // the subscription filed has user reference in schema
             $lookup: {
-                from: "subscription",
+                from: "subscriptions",
                 localField: "_id",
                 foreignField: "channel",
                 as: "subscribers",
@@ -387,7 +410,7 @@ const getUserChannelProfile = asyncHandler(async (req, res) => {
                 email: 1,
                 avatar: 1,
                 coverImage: 1,
-                subcribersCount: 1,
+                subscribersCount: 1,
                 channelsSubscribedToCount: 1,
                 isSubscribed: 1
             },

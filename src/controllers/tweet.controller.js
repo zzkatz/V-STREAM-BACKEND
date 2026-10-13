@@ -130,6 +130,7 @@ const getUserTweets = asyncHandler(async (req, res) => {
                     {
                         $project: {
                             likedBy: 1,
+                            type: 1,
                         },
                     },
                 ],
@@ -137,15 +138,43 @@ const getUserTweets = asyncHandler(async (req, res) => {
         },
         {
             $addFields: {
+                likeEntries: {
+                    $filter: {
+                        input: "$likeDetails",
+                        as: "like",
+                        cond: { $ne: ["$$like.type", "dislike"] },
+                    },
+                },
+                dislikeEntries: {
+                    $filter: {
+                        input: "$likeDetails",
+                        as: "like",
+                        cond: { $eq: ["$$like.type", "dislike"] },
+                    },
+                },
+            },
+        },
+        {
+            $addFields: {
                 likesCount: {
-                    $size: "$likeDetails",
+                    $size: "$likeEntries",
+                },
+                dislikesCount: {
+                    $size: "$dislikeEntries",
                 },
                 ownerDetails: {
                     $first: "$ownerDetails",
                 },
                 isLiked: {
                     $cond: {
-                        if: { $in: [req.user?._id, "$likeDetails.likedBy"] },
+                        if: { $in: [req.user?._id, "$likeEntries.likedBy"] },
+                        then: true,
+                        else: false,
+                    },
+                },
+                isDisliked: {
+                    $cond: {
+                        if: { $in: [req.user?._id, "$dislikeEntries.likedBy"] },
                         then: true,
                         else: false,
                     },
@@ -162,8 +191,10 @@ const getUserTweets = asyncHandler(async (req, res) => {
                 content: 1,
                 ownerDetails: 1,
                 likesCount: 1,
+                dislikesCount: 1,
                 createdAt: 1,
                 isLiked: 1,
+                isDisliked: 1,
             },
         },
     ]);
